@@ -1,5 +1,3 @@
-import numpy as np
-import pandas as pd
 from numba import jit, int64
 from datetime import timedelta
 
@@ -19,6 +17,8 @@ def calculate_last_active_mode_hour(user_ids, dates, hours, clicks, current_indi
         Array of mode hours for each record
     """
     results = np.zeros(len(current_indices), dtype=int64)
+    results_1 = np.zeros(len(current_indices), dtype=int64)
+    
     
     for i in range(len(current_indices)):
         current_idx = current_indices[i]
@@ -48,15 +48,15 @@ def calculate_last_active_mode_hour(user_ids, dates, hours, clicks, current_indi
         # Calculate mode hour if we found any activity
         if last_active_date != -1:
             results[i] = np.argmax(hour_counts)
+            results_1[i] = np.max(np.nonzero(hour_counts))
+            
         else:
             results[i] = -1  # No previous activity
+            results_1[i] = np.max(np.nonzero(hour_counts))
     
-    return results
+    return results, results_1
 
-def calculate_user_last_active_features(df, user_col='user_id', 
-                                     date_col='date', 
-                                     clicks_col='clicks',
-                                     hour_col='hour'):
+def calculate_user_last_active_features(data, user_col, date_col, clicks_col, hour_col, output_col):
     """
     Main function to calculate last active day mode hour features.
     
@@ -70,57 +70,30 @@ def calculate_user_last_active_features(df, user_col='user_id',
     Returns:
         DataFrame with original columns plus mode_hour_last_active
     """
-    # Convert to datetime if needed
-    if not np.issubdtype(df[date_col].dtype, np.datetime64):
-        df[date_col] = pd.to_datetime(df[date_col])
+#     if not np.issubdtype(data[date_col].dtype, np.datetime64):
+#         data[date_col] = pd.to_datetime(data[date_col])
     
-    # Sort by user and date (critical for performance)
-    df = df.sort_values([user_col, date_col]).copy()
+    data = data.sort_values([user_col, date_col]).copy()
     
     # Create days since epoch for faster comparison
-    min_date = df[date_col].min()
-    df['days_since_epoch'] = (df[date_col] - min_date).dt.days
+    min_date = data[date_col].min()
+    data['days_since_epoch'] = (data[date_col] - min_date).dt.days
     
     # Prepare numpy arrays for Numba
-    user_ids = df[user_col].values.astype(np.int64)
-    days_since_epoch = df['days_since_epoch'].values.astype(np.int64)
-    hours = df[hour_col].values.astype(np.int64)
-    clicks = df[clicks_col].values.astype(np.int64)
-    current_indices = np.arange(len(df), dtype=np.int64)
+    user_ids = data[user_col].values.astype(np.int64)
+    days_since_epoch = data['days_since_epoch'].values.astype(np.int64)
+    hours = data[hour_col].values.astype(np.int64)
+    clicks = data[clicks_col].values.astype(np.int64)
+    current_indices = np.arange(len(data), dtype=np.int64)
     
-    # Calculate features with Numba
-    mode_hours = calculate_last_active_mode_hour(
+    result_df = calculate_last_active_mode_hour(
         user_ids, days_since_epoch, hours, clicks, current_indices
     )
     
     # Add to dataframe
-    df['mode_hour_last_active'] = mode_hours
+#     (pd.concat([data,pd.DataFrame(result_df,columns=['Last_Active_Day_Mode','L')
     
-    # Clean up temporary column
-    df.drop('days_since_epoch', axis=1, inplace=True)
+#     # Clean up temporary column
+#     data.drop('days_since_epoch', axis=1, inplace=True)
     
-    return df
-
-# Example usage:
-if __name__ == "__main__":
-    # Create sample data (11M records in real usage)
-    n_samples = 100000  # Smaller sample for demonstration
-    dates = pd.date_range('2023-01-01', periods=30)
-    data = {
-        'user_id': np.random.randint(1, 10000, n_samples),
-        'date': np.random.choice(dates, n_samples),
-        'hour': np.random.randint(0, 24, n_samples),
-        'clicks': np.random.randint(1, 10, n_samples)
-    }
-    df = pd.DataFrame(data)
-    
-    # Calculate features
-    result_df = calculate_user_last_active_features(
-        df, 
-        user_col='user_id',
-        date_col='date',
-        clicks_col='clicks',
-        hour_col='hour'
-    )
-    
-    print(result_df.head())
+    return result_df#data[[user_col, date_col, output_col]]
