@@ -24,11 +24,9 @@ def calculate_continental_activity_mode(continents, days_since_epoch, hours, cli
         current_continent = continents[current_idx]
         current_day = days_since_epoch[current_idx]
         
-        hour_counts = np.zeros(24, dtype=np.int64)
-        
         # Look backward through history
         for idx, days in enumerate(lookback_days):
-            
+            hour_counts = np.zeros(24, dtype=np.int64)
             min_day = current_day - days
             j = current_idx - 1
             while j >= 0 and continents[j] == current_continent and days_since_epoch[j] >= min_day:
@@ -82,8 +80,8 @@ def calculate_continent_features_N_lookback(data, continent_enc_col, date_col, c
     feature_names = []
     for i in range(len(lookback_days_list)):
         val = lookback_days_list[i]
-        data[f"mode_hour_by_continent_{val}_days"] = result_df[:,i]
-    feature_names.append(f'mode_hour_by_continent_{val}_days')
+        data[f"continent_mode_hour_{val}_days"] = result_df[:,i]
+        feature_names.append(f'continent_mode_hour_{val}_days')
     
     data.drop('days_since_epoch', axis=1, inplace=True)
     
