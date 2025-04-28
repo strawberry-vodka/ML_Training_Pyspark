@@ -1,51 +1,54 @@
-from numba import jit, int64, float64
+from numba import jit
 
 @jit(nopython=True)
-def calculate_recent_user_activity_mode(user_ids, days_since_epoch, hours, clicks, current_indices, lookback_days):
+def calculate_continental_activity_mode(continents, days_since_epoch, hours, clicks, current_indices, lookback_days):
     """
     Numba-optimized function to calculate mode hour
     
     Args:
-        user_ids: Array of user IDs (int64)
+        continents: Array of continents (int64)
         days_since_epoch: Array of dates as days since epoch (int64)
         hours: Array of hours (0-23) (int64)
         clicks: Array of click counts (int64)
         current_indices: Indices of current records (int64)
         
     Returns:
-        Array of features (n x 5) containing:
-        - Overall mode hour
+        Array of features (n) containing:
+        - Overall mode hour from N lookback days
     """
     n = len(current_indices)
-    results = np.zeros(n, dtype=np.float64)
+    results = np.zeros((n, len(lookback_days)), dtype=np.float64)
     
     for i in range(n):
         current_idx = current_indices[i]
-        current_user = user_ids[current_idx]
+        current_continent = continents[current_idx]
         current_day = days_since_epoch[current_idx]
-        min_day = current_day - lookback_days
         
         hour_counts = np.zeros(24, dtype=np.int64)
+        
         # Look backward through history
-        j = current_idx - 1
-        while j >= 0 and user_ids[j] == current_user and days_since_epoch[j] >= min_day:
-            if days_since_epoch[j] < current_day:  # Exclude current date
-                hour = hours[j]
-                click_count = clicks[j]
-                hour_counts[hour] += click_count
-            j -= 1            
+        for idx, days in enumerate(lookback_days):
             
-        # Store results
-        results[i, 0] = np.argmax(hour_counts) if np.sum(hour_counts) > 0 else -1
+            min_day = current_day - days
+            j = current_idx - 1
+            while j >= 0 and continents[j] == current_continent and days_since_epoch[j] >= min_day:
+                if days_since_epoch[j] < current_day:  # Exclude current date
+                    hour = hours[j]
+                    click_count = clicks[j]
+                    hour_counts[hour] += click_count
+                j -= 1            
+            
+            results[i,idx] = np.argmax(hour_counts) if np.sum(hour_counts) > 0 else -1
+            
     return results
 
-def calculate_user_activity_features_N_lookback(data, user_col, date_col, clicks_col, hour_col, lookback_days):
+def calculate_continent_features_N_lookback(data, continent_enc_col, date_col, clicks_col, hour_col, lookback_days_list):
     """
     Main function to calculate user activity features.
     
     Args:
         data: Input DataFrame
-        user_col: User ID column name
+        continent_enc_col: User ID column name
         date_col: Date column name
         clicks_col: Clicks count column name
         hour_col: Hour column name
@@ -59,26 +62,29 @@ def calculate_user_activity_features_N_lookback(data, user_col, date_col, clicks
         data[date_col] = pd.to_datetime(data[date_col])
     
     # Sort data by user and date (critical for algorithm)
-    data = data.sort_values([user_col, date_col]).copy()
+    data = data.sort_values([continent_enc_col, date_col]).copy()
+    data.drop_duplicates(subset = [continent_enc_col,date_col], keep='first', inplace=True)
     
     # Create days since epoch for fast comparison
     min_date = data[date_col].min()
     data['days_since_epoch'] = (data[date_col] - min_date).dt.days
     
     # Prepare numpy arrays with explicit types for Numba
-    user_ids = data[user_col].values.astype(np.int64)
+    continents = data[continent_enc_col].values.astype(np.int64)
     days_since_epoch = data['days_since_epoch'].values.astype(np.int64)
     hours = data[hour_col].values.astype(np.int64)
     clicks = data[clicks_col].values.astype(np.int64)
     current_indices = np.arange(len(data), dtype=np.int64)
     
     # Calculate features
-    for days in lookback_days:
-        data[f'mode_hour_{days}_days'] = calculate_recent_user_activity_mode(
-            user_ids, days_since_epoch, hours, clicks, current_indices, days)
-        feature_names.extend(f'mode_hour_{days}')
+    result_df = calculate_continental_activity_mode(continents, days_since_epoch, hours, clicks, current_indices,
+                                                    lookback_days_list)
+    feature_names = []
+    for i in range(len(lookback_days_list)):
+        val = lookback_days_list[i]
+        data[f"mode_hour_by_continent_{val}_days"] = result_df[:,i]
+    feature_names.append(f'mode_hour_by_continent_{val}_days')
+    
     data.drop('days_since_epoch', axis=1, inplace=True)
     
-    data.drop_duplicates(subset = [user_col,date_col], keep='first', inplace=True)
-    
-    return data[list([user_col,date_col]) + feature_names]
+    return data[list([continent_enc_col,date_col]) + feature_names]
