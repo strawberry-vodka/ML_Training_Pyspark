@@ -1,40 +1,58 @@
-def circular_loss(y_true, y_pred):
-    """Custom loss function for circular regression"""
-    # Split predictions into sin and cos components
-    pred_sin = y_pred[:, 0]
-    pred_cos = y_pred[:, 1]
+def train_circular_lgbm(batch_paths):
+    params = {
+        'objective': 'custom',
+        'learning_rate': 0.05,
+        'num_leaves': 31,
+        'feature_fraction': 0.9,
+        'bagging_fraction': 0.8,
+        'bagging_freq': 5,
+        'verbose': -1,
+        'seed': 42
+    }
     
-    # Convert to angles
-    pred_angle = np.arctan2(pred_sin, pred_cos)
-    true_angle = np.arctan2(y_true[:, 0], y_true[:, 1])
+    model = None
     
-    # Calculate circular distance
-    diff = np.abs(pred_angle - true_angle)
-    circular_diff = np.minimum(diff, 2*np.pi - diff)
+    for i, path in enumerate(batch_paths):
+        print(f"Processing batch {i+1}/{len(batch_paths)}")
+        df = pd.read_parquet(path)
+        X, y_sin, y_cos = prepare_data(df)
+        
+        # Combine targets into 2D array
+        y = np.column_stack((y_sin, y_cos))
+        
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
+        
+        # Create LightGBM datasets
+        train_data = lgb.Dataset(X_train, label=y_train.reshape(-1))
+        val_data = lgb.Dataset(X_val, label=y_val.reshape(-1), reference=train_data)
+        
+        if model is None:
+            # First batch
+            model = lgb.train(
+                params,
+                train_data,
+                valid_sets=[val_data],
+                num_boost_round=1000,
+                early_stopping_rounds=50,
+                fobj=lgb_circular_loss,
+                feval=lambda p, d: ('circular_loss', circular_loss(p.reshape(-1, 2), d.get_label().reshape(-1, 2)), False),
+                callbacks=[lgb.log_evaluation(50)]
+            )
+        else:
+            # Subsequent batches
+            model = lgb.train(
+                params,
+                train_data,
+                valid_sets=[val_data],
+                num_boost_round=1000,
+                early_stopping_rounds=50,
+                init_model=model,
+                fobj=lgb_circular_loss,
+                feval=lambda p, d: ('circular_loss', circular_loss(p.reshape(-1, 2), d.get_label().reshape(-1, 2)), False),
+                callbacks=[lgb.log_evaluation(50)],
+                keep_training_booster=True
+            )
     
-    return np.mean(circular_diff**2)  # MSE of circular difference
-
-def lgb_circular_loss(preds, train_data):
-    """LightGBM compatible circular loss"""
-    y_true = train_data.get_label()
-    y_true = y_true.reshape(-1, 2)  # Reshape to (n_samples, 2)
-    
-    preds = preds.reshape(-1, 2)  # Reshape predictions
-    
-    grad = np.zeros_like(preds)
-    hess = np.zeros_like(preds)
-    
-    # Calculate gradients and hessians (simplified version)
-    pred_angle = np.arctan2(preds[:, 0], preds[:, 1])
-    true_angle = np.arctan2(y_true[:, 0], y_true[:, 1])
-    
-    diff = pred_angle - true_angle
-    circular_diff = np.minimum(np.abs(diff), 2*np.pi - np.abs(diff))
-    
-    grad[:, 0] = 2 * circular_diff * (-np.sin(pred_angle))
-    grad[:, 1] = 2 * circular_diff * (np.cos(pred_angle))
-    
-    hess[:, 0] = 2 * np.sin(pred_angle)**2
-    hess[:, 1] = 2 * np.cos(pred_angle)**2
-    
-    return grad.flatten(), hess.flatten()
+    return model
