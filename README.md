@@ -1,90 +1,73 @@
-def prepare_data(df, target_col='click_hour'):
-    """Safe feature/target separation"""
-    df[target_col] = df['click_timestamp'].dt.hour
+import tensorflow as tf
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.model_selection import train_test_split
 
-    # Drop unused columns
-    features = df.drop(['user_id', 'click_timestamp', target_col], axis=1)
+# 1. Preprocessing
+def prepare_data(df):
+    # Convert click hour to radians
+    hour_rad = df['click_hour'] * 2 * np.pi / 24
+    df['target_sin'] = np.sin(hour_rad)
+    df['target_cos'] = np.cos(hour_rad)
 
-    # Target to radians
-    hour_rad = df[target_col] * (2 * np.pi / 24)
-    y_sin = np.sin(hour_rad)
-    y_cos = np.cos(hour_rad)
+    # Encode audience_id
+    le = LabelEncoder()
+    df['audience_idx'] = le.fit_transform(df['audienceid'])
 
-    return features, y_sin, y_cos
+    # Scale features (exclude ID and target)
+    feature_cols = [col for col in df.columns if col.startswith(('feat_90d_', 'feat_30d_', 'feat_7d_'))]
+    scaler = StandardScaler()
+    df[feature_cols] = scaler.fit_transform(df[feature_cols])
 
-def temporal_train_test_split(X, y, test_size=0.2):
-    """Time-based split"""
-    split_idx = int(len(X) * (1 - test_size))
-    return X.iloc[:split_idx], X.iloc[split_idx:], y[:split_idx], y[split_idx:]
+    return df, feature_cols, le
 
-def predict_hour(pred_sin, pred_cos):
-    """Convert sin/cos predictions to hour"""
-    norms = np.sqrt(pred_sin**2 + pred_cos**2)
-    valid = norms > 1e-6
-    hours = np.zeros(len(pred_sin))
-    hours[valid] = (np.arctan2(pred_sin[valid], pred_cos[valid]) * 24 / (2 * np.pi)) % 24
+# 2. Build Model
+def build_model(num_features, num_audience_ids, embed_dim=16):
+    audience_input = tf.keras.Input(shape=(1,), name="audience_idx", dtype="int32")
+    feature_input = tf.keras.Input(shape=(num_features,), name="features")
+
+    x_embed = tf.keras.layers.Embedding(input_dim=num_audience_ids, output_dim=embed_dim)(audience_input)
+    x_embed = tf.keras.layers.Flatten()(x_embed)
+
+    x = tf.keras.layers.Concatenate()([x_embed, feature_input])
+    x = tf.keras.layers.Dense(128, activation='relu')(x)
+    x = tf.keras.layers.Dense(64, activation='relu')(x)
+    x = tf.keras.layers.Dense(32, activation='relu')(x)
+    output = tf.keras.layers.Dense(2, activation='linear', name='angle_output')(x)
+
+    model = tf.keras.Model(inputs=[audience_input, feature_input], outputs=output)
+    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+    return model
+
+# 3. Training
+def train_model(df):
+    df, feature_cols, le = prepare_data(df)
+
+    X_audience = df['audience_idx'].values
+    X_features = df[feature_cols].values
+    y = df[['target_sin', 'target_cos']].values
+
+    X_train_aud, X_val_aud, X_train_feat, X_val_feat, y_train, y_val = train_test_split(
+        X_audience, X_features, y, test_size=0.2, shuffle=False
+    )
+
+    model = build_model(num_features=len(feature_cols), num_audience_ids=df['audience_idx'].nunique())
+
+    model.fit(
+        {"audience_idx": X_train_aud, "features": X_train_feat},
+        y_train,
+        validation_data=({"audience_idx": X_val_aud, "features": X_val_feat}, y_val),
+        epochs=20,
+        batch_size=512
+    )
+
+    return model, le, feature_cols
+
+# 4. Prediction Conversion
+def predict_hour_from_sin_cos(y_pred):
+    sin_val = y_pred[:, 0]
+    cos_val = y_pred[:, 1]
+    radians = np.arctan2(sin_val, cos_val)
+    hours = (radians * 24 / (2 * np.pi)) % 24
     return np.round(hours).astype(int)
-
-def train_single_target(batch_paths, target='sin'):
-    model = None
-    metrics = []
-
-    params = {
-        'objective': 'regression',
-        'verbosity': -1,
-        'seed': 42,
-        'num_leaves': 31,
-        'feature_fraction': 0.9,
-        'learning_rate': 0.05
-    }
-
-    for i, path in enumerate(batch_paths):
-        df = pd.read_parquet(path).sort_values('click_timestamp')
-        X, y_sin, y_cos = prepare_data(df)
-        y = y_sin if target == 'sin' else y_cos
-
-        X_train, X_val, y_train, y_val = temporal_train_test_split(X, y)
-
-        train_data = lgb.Dataset(X_train, label=y_train, free_raw_data=False)
-        val_data = lgb.Dataset(X_val, label=y_val, reference=train_data)
-
-        model = lgb.train(
-            params,
-            train_data,
-            valid_sets=[val_data],
-            num_boost_round=1000,
-            early_stopping_rounds=50,
-            init_model=model,
-            keep_training_booster=True,
-            callbacks=[
-                lgb.log_evaluation(50),
-                lgb.reset_parameter(
-                    learning_rate=lambda x: max(0.01, 0.05 * (0.9 ** x))
-                )
-            ]
-        )
-
-        # For sin/cos separately, no accuracy calculation here
-        metrics.append(model.best_score['valid_0']['l2'])
-
-    return model, metrics
-
-def train_combined_and_evaluate(batch_paths):
-    model_sin, _ = train_single_target(batch_paths, target='sin')
-    model_cos, _ = train_single_target(batch_paths, target='cos')
-
-    df = pd.concat([pd.read_parquet(p) for p in batch_paths]).sort_values('click_timestamp')
-    X, y_sin, y_cos = prepare_data(df)
-    y_true_hours = df['click_hour']
-
-    pred_sin = model_sin.predict(X)
-    pred_cos = model_cos.predict(X)
-
-    pred_hours = predict_hour(pred_sin, pred_cos)
-    exact_match = np.mean(pred_hours == y_true_hours)
-    plus_minus_1 = np.mean(np.abs((pred_hours - y_true_hours + 12) % 24 - 12) <= 1)
-
-    print(f"Exact Match Accuracy: {exact_match:.2%}")
-    print(f"±1 Hour Accuracy: {plus_minus_1:.2%}")
-
-    return model_sin, model_cos
