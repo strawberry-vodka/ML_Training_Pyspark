@@ -1,148 +1,99 @@
-import numpy as np
-import pandas as pd
-from tensorflow.keras.layers import Input, Embedding, Flatten, Dense, Concatenate
-from tensorflow.keras.models import Model
-from tensorflow.keras.callbacks import EarlyStopping
-from sklearn.model_selection import train_test_split
+File ~/anaconda3/envs/py3.9/lib/python3.9/site-packages/tensorflow/python/eager/execute.py:52, in quick_execute(op_name, num_outputs, inputs, attrs, ctx, name)
+     50 try:
+     51   ctx.ensure_initialized()
+---> 52   tensors = pywrap_tfe.TFE_Py_Execute(ctx._handle, device_name, op_name,
+     53                                       inputs, attrs, num_outputs)
+     54 except core._NotOkStatusException as e:
+     55   if name is not None:
 
-def preprocess_data(df):
-    """Prepare features and targets with circular encoding"""
-    # Extract hour and convert to radians for circular encoding
-    df['click_hour_rad'] = df['click_timestamp'].dt.hour * (2 * np.pi / 24)
-    
-    # Create circular targets
-    y_sin = np.sin(df['click_hour_rad'])
-    y_cos = np.cos(df['click_hour_rad'])
-    y = np.column_stack((y_sin, y_cos))
-    
-    # Identify numeric columns (excluding IDs and timestamps)
-    numeric_cols = [col for col in df.columns if col not in ['audience_id', 'click_timestamp', 'click_hour_rad']]
-    
-    return df, y, numeric_cols
+InvalidArgumentError: Graph execution error:
 
-def temporal_split(df, y, test_size=0.2):
-    """Time-based split maintaining temporal order"""
-    split_idx = int(len(df) * (1 - test_size))
-    return (df.iloc[:split_idx], df.iloc[split_idx:], 
-            y[:split_idx], y[split_idx:])
-
-def build_model(n_numeric_features, max_audience_id, embedding_dim=16):
-    """Build neural network with audience embeddings"""
-    # Input layers
-    audience_input = Input(shape=(1,), name='audience_id')
-    numeric_input = Input(shape=(n_numeric_features,), name='numeric')
-    
-    # Embedding layer (no label encoding needed)
-    embed = Embedding(input_dim=max_audience_id + 1,  # +1 for safety
-                     output_dim=embedding_dim)(audience_input)
-    embed_flat = Flatten()(embed)
-    
-    # Combined model
-    x = Concatenate()([numeric_input, embed_flat])
-    x = Dense(128, activation='relu')(x)
-    x = Dense(64, activation='relu')(x)
-    x = Dense(32, activation='relu')(x)
-    output = Dense(2, activation='linear')(x)  # sin and cos components
-    
-    model = Model(inputs=[audience_input, numeric_input], outputs=output)
-    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
-    return model
-
-def train_cyclic_nn(train_df, test_df=None):
-    """Complete training pipeline"""
-    # Preprocess training data
-    train_df, y_train, numeric_cols = preprocess_data(train_df)
-    
-    # Get max audience ID (assuming it's already numeric)
-    max_audience_id = int(train_df['audience_id'].max())
-    
-    # Temporal split if no test_df provided
-    if test_df is None:
-        X_train, X_val, y_train, y_val = temporal_split(train_df, y_train)
-    else:
-        # Preprocess test data
-        test_df, y_val, _ = preprocess_data(test_df)
-        X_train, X_val = train_df, test_df
-    
-    # Build model
-    model = build_model(
-        n_numeric_features=len(numeric_cols),
-        max_audience_id=max_audience_id,
-        embedding_dim=16
-    )
-    
-    # Train model
-    history = model.fit(
-        x={
-            'audience_id': X_train['audience_id'].values,
-            'numeric': X_train[numeric_cols].values
-        },
-        y=y_train,
-        validation_data=(
-            {
-                'audience_id': X_val['audience_id'].values,
-                'numeric': X_val[numeric_cols].values
-            },
-            y_val
-        ),
-        epochs=50,
-        batch_size=256,
-        callbacks=[
-            EarlyStopping(patience=5, restore_best_weights=True)
-        ],
-        verbose=2
-    )
-    
-    return model, history, X_val, y_val
-
-def predict_hours(model, df, numeric_cols):
-    """Predict hours from trained model"""
-    # Get predictions (sin and cos values)
-    preds = model.predict({
-        'audience_id': df['audience_id'].values,
-        'numeric': df[numeric_cols].values
-    })
-    
-    # Convert to angles then hours
-    angles = np.arctan2(preds[:, 0], preds[:, 1])
-    hours = (angles * 24 / (2 * np.pi)) % 24
-    return np.round(hours).astype(int)
-
-def evaluate_predictions(true_hours, pred_hours):
-    """Calculate cyclic accuracy metrics"""
-    # Calculate circular difference
-    diff = np.abs(true_hours - pred_hours)
-    circular_diff = np.minimum(diff, 24 - diff)
-    
-    # Metrics
-    accuracy_1h = np.mean(circular_diff <= 1)
-    accuracy_2h = np.mean(circular_diff <= 2)
-    mean_diff = np.mean(circular_diff)
-    
-    return {
-        'accuracy_within_1h': accuracy_1h,
-        'accuracy_within_2h': accuracy_2h,
-        'mean_circular_diff': mean_diff
-    }
-
-# Example usage:
-# Assuming you have train_df and test_df DataFrames with:
-# - audience_id (numeric)
-# - click_timestamp
-# - other numeric features
-
-# Train model
-model, history, X_val, y_val = train_cyclic_nn(train_df, test_df)
-
-# Get numeric columns (same as used in training)
-_, _, numeric_cols = preprocess_data(train_df)
-
-# Predict on validation/test set
-pred_hours = predict_hours(model, X_val, numeric_cols)
-
-# Get true hours from test data
-true_hours = (X_val['click_timestamp'].dt.hour).values
-
-# Evaluate
-metrics = evaluate_predictions(true_hours, pred_hours)
-print(f"Validation Metrics: {metrics}")
+Detected at node 'model_3/embedding_3/embedding_lookup' defined at (most recent call last):
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/runpy.py", line 197, in _run_module_as_main
+      return _run_code(code, main_globals, None,
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/runpy.py", line 87, in _run_code
+      exec(code, run_globals)
+    File "/home/chalam/.local/lib/python3.9/site-packages/ipykernel_launcher.py", line 18, in <module>
+      app.launch_new_instance()
+    File "/home/chalam/.local/lib/python3.9/site-packages/traitlets/config/application.py", line 1075, in launch_instance
+      app.start()
+    File "/home/chalam/.local/lib/python3.9/site-packages/ipykernel/kernelapp.py", line 739, in start
+      self.io_loop.start()
+    File "/home/chalam/.local/lib/python3.9/site-packages/tornado/platform/asyncio.py", line 205, in start
+      self.asyncio_loop.run_forever()
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/asyncio/base_events.py", line 601, in run_forever
+      self._run_once()
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/asyncio/base_events.py", line 1905, in _run_once
+      handle._run()
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/asyncio/events.py", line 80, in _run
+      self._context.run(self._callback, *self._args)
+    File "/home/chalam/.local/lib/python3.9/site-packages/ipykernel/kernelbase.py", line 545, in dispatch_queue
+      await self.process_one()
+    File "/home/chalam/.local/lib/python3.9/site-packages/ipykernel/kernelbase.py", line 534, in process_one
+      await dispatch(*args)
+    File "/home/chalam/.local/lib/python3.9/site-packages/ipykernel/kernelbase.py", line 437, in dispatch_shell
+      await result
+    File "/home/chalam/.local/lib/python3.9/site-packages/ipykernel/ipkernel.py", line 362, in execute_request
+      await super().execute_request(stream, ident, parent)
+    File "/home/chalam/.local/lib/python3.9/site-packages/ipykernel/kernelbase.py", line 778, in execute_request
+      reply_content = await reply_content
+    File "/home/chalam/.local/lib/python3.9/site-packages/ipykernel/ipkernel.py", line 449, in do_execute
+      res = shell.run_cell(
+    File "/home/chalam/.local/lib/python3.9/site-packages/ipykernel/zmqshell.py", line 549, in run_cell
+      return super().run_cell(*args, **kwargs)
+    File "/home/chalam/.local/lib/python3.9/site-packages/IPython/core/interactiveshell.py", line 3048, in run_cell
+      result = self._run_cell(
+    File "/home/chalam/.local/lib/python3.9/site-packages/IPython/core/interactiveshell.py", line 3103, in _run_cell
+      result = runner(coro)
+    File "/home/chalam/.local/lib/python3.9/site-packages/IPython/core/async_helpers.py", line 129, in _pseudo_sync_runner
+      coro.send(None)
+    File "/home/chalam/.local/lib/python3.9/site-packages/IPython/core/interactiveshell.py", line 3308, in run_cell_async
+      has_raised = await self.run_ast_nodes(code_ast.body, cell_name,
+    File "/home/chalam/.local/lib/python3.9/site-packages/IPython/core/interactiveshell.py", line 3490, in run_ast_nodes
+      if await self.run_code(code, result, async_=asy):
+    File "/home/chalam/.local/lib/python3.9/site-packages/IPython/core/interactiveshell.py", line 3550, in run_code
+      exec(code_obj, self.user_global_ns, self.user_ns)
+    File "/tmp/ipykernel_2695339/3556296158.py", line 1, in <module>
+      get_ipython().run_cell_magic('time', '', 'predictions = nn_model.predict(X_test, batch_size = 512)\n')
+    File "/home/chalam/.local/lib/python3.9/site-packages/IPython/core/interactiveshell.py", line 2517, in run_cell_magic
+      result = fn(*args, **kwargs)
+    File "/home/chalam/.local/lib/python3.9/site-packages/IPython/core/magics/execution.py", line 1340, in time
+      exec(code, glob, local_ns)
+    File "<timed exec>", line 1, in <module>
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/utils/traceback_utils.py", line 65, in error_handler
+      return fn(*args, **kwargs)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/engine/training.py", line 2382, in predict
+      tmp_batch_outputs = self.predict_function(iterator)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/engine/training.py", line 2169, in predict_function
+      return step_function(self, iterator)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/engine/training.py", line 2155, in step_function
+      outputs = model.distribute_strategy.run(run_step, args=(data,))
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/engine/training.py", line 2143, in run_step
+      outputs = model.predict_step(data)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/engine/training.py", line 2111, in predict_step
+      return self(x, training=False)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/utils/traceback_utils.py", line 65, in error_handler
+      return fn(*args, **kwargs)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/engine/training.py", line 558, in __call__
+      return super().__call__(*args, **kwargs)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/utils/traceback_utils.py", line 65, in error_handler
+      return fn(*args, **kwargs)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/engine/base_layer.py", line 1145, in __call__
+      outputs = call_fn(inputs, *args, **kwargs)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/utils/traceback_utils.py", line 96, in error_handler
+      return fn(*args, **kwargs)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/engine/functional.py", line 512, in call
+      return self._run_internal_graph(inputs, training=training, mask=mask)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/engine/functional.py", line 669, in _run_internal_graph
+      outputs = node.layer(*args, **kwargs)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/utils/traceback_utils.py", line 65, in error_handler
+      return fn(*args, **kwargs)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/engine/base_layer.py", line 1145, in __call__
+      outputs = call_fn(inputs, *args, **kwargs)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/utils/traceback_utils.py", line 96, in error_handler
+      return fn(*args, **kwargs)
+    File "/home/chalam/anaconda3/envs/py3.9/lib/python3.9/site-packages/keras/layers/core/embedding.py", line 272, in call
+      out = tf.nn.embedding_lookup(self.embeddings, inputs)
+Node: 'model_3/embedding_3/embedding_lookup'
+indices[0,0] = 910858 is not in [0, 45174)
+	 [[{{node model_3/embedding_3/embedding_lookup}}]] [Op:__inference_predict_function_93102]
