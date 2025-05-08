@@ -1,3 +1,12 @@
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from tensorflow.keras.layers import Input, Embedding, Flatten, Dense, Concatenate, BatchNormalization, Dropout
+from tensorflow.keras.models import Model
+from tensorflow.keras.callbacks import EarlyStopping
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+import matplotlib.pyplot as plt
+
 class CyclicOrdinalRegressor:
     
     def __init__(self, numerical_cyclical_vars, numerical_vars, categorical_vars, name):
@@ -118,7 +127,7 @@ class CyclicOrdinalRegressor:
             pred_angle = tf.atan2(y_pred[:, 0], y_pred[:, 1])
             diff = tf.abs(true_angle - pred_angle)
             circular_diff = tf.minimum(diff, 2*np.pi - diff)
-            return tf.reduce_mean(tf.square(circular_diff))
+            return tf.reduce_mean(circular_diff)
         
         self.model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
@@ -126,24 +135,24 @@ class CyclicOrdinalRegressor:
             metrics=['mae']
         )
     
-    def train_model(self, train_data, target_column, epochs=100, batch_size=32768, validation_split=0.2):
+    def train_model(self, train_data, target_column, epochs=100, batch_size=32768, validation_split=0.05):
         """Train with early stopping"""
 
         split_idx  = int(len(train_data) * (1- validation_split))
         val_data = train_data.iloc[split_idx:]
         train_data = train_data.iloc[:split_idx]
 
-        print("Training Shape:", train_data.shape)
-        print("Validation Shape:", val_data.shape)
+        print("Training Shape:", train_data.shape, train_data["click_date"].min(), train_data["click_date"].max())
+        print("Validation Shape:", val_data.shape, val_data["click_date"].min(), val_data["click_date"].max())
         
         X_train = model.preprocess_data(train_data, is_train=True)
         X_val = model.preprocess_data(val_data, is_train=False)
         
-        y_sin_train = train_data[f'{target_column}_sin'].iloc[:split_idx]
-        y_cos_train = train_data[f'{target_column}_cos'].iloc[:split_idx]
+        y_sin_train = train_data[f'{target_column}_sin']
+        y_cos_train = train_data[f'{target_column}_cos']
 
-        y_sin_val = val_data[f'{target_column}_sin'].iloc[split_idx:]
-        y_cos_val = val_data[f'{target_column}_cos'].iloc[split_idx:]
+        y_sin_val = val_data[f'{target_column}_sin']
+        y_cos_val = val_data[f'{target_column}_cos']
 
         y_train = np.column_stack((y_sin_train, y_cos_train))
         y_val =  np.column_stack((y_sin_val, y_cos_val))
@@ -197,3 +206,22 @@ class CyclicOrdinalRegressor:
         radians = np.arctan2(y_sin, y_cos)
         hours = (radians * 24 / (2 * np.pi)) % 24
         return (np.round(hours)%24).astype(int)
+		
+		
+num_cyclic_features_list = []
+num_features_list = []
+model = CyclicOrdinalRegressor(numerical_cyclical_vars=num_cyclic_features_list,
+    numerical_vars = num_features_list,
+    categorical_vars = ['audienceid','ismobileplatform', 'EST_TimeZone', 'AgeBucket', 'SearchOrigin', 'HomeAirport2', 'CountryCode','Continent'],
+    name='email_time_predictor'
+    )
+	
+model.calculate_embedding_sizes(train_df)
+model.build_model()
+model.compile_model()
+
+#Sort Train and Test Data
+train_df.sort_values('click_date', inplace=True)
+test_df.sort_values('click_date',inplace=True)
+
+model.train_model(train_df, target_column = 'local_click_hour', epochs=50, batch_size=512)
