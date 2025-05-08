@@ -1,12 +1,3 @@
-import numpy as np
-import pandas as pd
-import tensorflow as tf
-from tensorflow.keras.layers import Input, Embedding, Flatten, Dense, Concatenate, BatchNormalization, Dropout
-from tensorflow.keras.models import Model
-from tensorflow.keras.callbacks import EarlyStopping
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-import matplotlib.pyplot as plt
-
 class CyclicOrdinalRegressor:
     
     def __init__(self, numerical_cyclical_vars, numerical_vars, categorical_vars, name):
@@ -107,10 +98,10 @@ class CyclicOrdinalRegressor:
                 )
             X_categorical.append(data[f'{col}_enc'].values.reshape(-1, 1))
         
-        # 2. Process cyclical numerical features (no scaling needed)
+        # 2. Process cyclical numerical features 
         X_numerical_cyclical = data[self.numerical_cyclical_vars].values
         
-        # 3. Process regular numerical features (with scaling)
+        # 3. Scale numerical non-cyclic features 
         if is_train:
             X_numerical_scaled = self.scaler.fit_transform(data[self.numerical_vars])
         else:
@@ -135,18 +126,41 @@ class CyclicOrdinalRegressor:
             metrics=['mae']
         )
     
-    def train_model(self, X, y, epochs=100, batch_size=32768, validation_split=0.2):
+    def train_model(self, train_data, target_column, epochs=100, batch_size=32768, validation_split=0.2):
         """Train with early stopping"""
+
+        split_idx  = int(len(train_data) * (1- validation_split))
+        val_data = train_data.iloc[split_idx:]
+        train_data = train_data.iloc[:split_idx]
+
+        print("Training Shape:", train_data.shape)
+        print("Validation Shape:", val_data.shape)
+        
+        X_train = model.preprocess_data(train_data, is_train=True)
+        X_val = model.preprocess_data(val_data, is_train=False)
+        
+        y_sin_train = train_data[f'{target_column}_sin'].iloc[:split_idx]
+        y_cos_train = train_data[f'{target_column}_cos'].iloc[:split_idx]
+
+        y_sin_val = val_data[f'{target_column}_sin'].iloc[split_idx:]
+        y_cos_val = val_data[f'{target_column}_cos'].iloc[split_idx:]
+
+        y_train = np.column_stack((y_sin_train, y_cos_train))
+        y_val =  np.column_stack((y_sin_val, y_cos_val))
+
+        print(f"Train Shape: {len(X_train)}, {y_train.shape}")
+        print(f"Val Shape: {len(X_val)}, {y_val.shape}")
+        
         callbacks = [
-            EarlyStopping(patience=10, restore_best_weights=True),
+            EarlyStopping(patience=10, restore_best_weights=True), 
         ]
         
         history = self.model.fit(
-            x=X,
-            y=y,
+            x=X_train,
+            y=y_train,
             epochs=epochs,
             batch_size=batch_size,
-            validation_split=validation_split,
+            validation_data=(X_val, y_val),
             callbacks=callbacks,
             verbose=2
         )
@@ -178,52 +192,8 @@ class CyclicOrdinalRegressor:
     def predict_hours(self, X):
         """Predict hours from model output"""
         preds = self.model.predict(X)
-        angles = np.arctan2(preds[:, 0], preds[:, 1])
-        hours = (angles * 24 / (2 * np.pi)) % 24
-        return np.round(hours).astype(int)
-
-# Example Usage
-if __name__ == "__main__":
-    # Sample data
-    data = pd.DataFrame({
-        'audience_id': np.random.choice(['A','B','C','D'], 1000),
-        'hour_sin': np.sin(np.linspace(0, 2*np.pi, 1000)),
-        'hour_cos': np.cos(np.linspace(0, 2*np.pi, 1000)),
-        'user_age': np.random.randint(18, 70, 1000),
-        'purchase_count': np.random.poisson(3, 1000),
-        'click_hour': np.random.randint(0, 24, 1000)
-    })
-    
-    # Initialize model
-    model = CyclicOrdinalRegressor(
-        numerical_cyclical_vars=['hour_sin', 'hour_cos'],
-        numerical_vars=['user_age', 'purchase_count'],
-        categorical_vars=['audience_id'],
-        name='email_time_predictor'
-    )
-    
-    # Prepare data
-    model.calculate_embedding_sizes(data)
-    X = model.preprocess_data(data, is_train=True)
-    y = np.column_stack([
-        np.sin(data['click_hour'] * (2*np.pi/24)),
-        np.cos(data['click_hour'] * (2*np.pi/24))
-    ])
-    
-    # Build, compile and train
-    model.build_model()
-    model.compile_model()
-    history = model.train_model(X, y, epochs=50, batch_size=256)
-    
-    # Predict on new data
-    test_data = pd.DataFrame({
-        'audience_id': np.random.choice(['A','B','E'], 100),  # Note 'E' is new
-        'hour_sin': np.sin(np.linspace(0, 2*np.pi, 100)),
-        'hour_cos': np.cos(np.linspace(0, 2*np.pi, 100)),
-        'user_age': np.random.randint(20, 80, 100),
-        'purchase_count': np.random.poisson(5, 100)
-    })
-    
-    X_test = model.preprocess_data(test_data, is_train=False)
-    predicted_hours = model.predict_hours(X_test)
-    print("Predicted hours:", predicted_hours)
+        y_sin = preds[:, 0]
+        y_cos = preds[:, 1]
+        radians = np.arctan2(y_sin, y_cos)
+        hours = (radians * 24 / (2 * np.pi)) % 24
+        return (np.round(hours)%24).astype(int)
