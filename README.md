@@ -66,3 +66,25 @@ class CyclicOrdinalRegressor:
         return history
 
     # ... [Keep remaining methods unchanged] ...
+
+
+    def predict_on_cached_train(self, batch_size=32768):
+    """Generate predictions using the cached X_train from training"""
+    if not hasattr(self, 'X_train_full'):
+        raise ValueError("No cached training data found. Call train_model first.")
+    
+    # Convert to dictionary if multi-input
+    if isinstance(self.X_train_full, list):
+        input_names = [layer.name for layer in self.model.inputs]
+        X_train_dict = dict(zip(input_names, self.X_train_full))
+    else:
+        X_train_dict = self.X_train_full
+    
+    # Batch prediction
+    preds = []
+    for i in range(0, len(self.X_train_full[0]), batch_size):  # Assuming first array has length
+        batch = {k: v[i:i+batch_size] for k, v in X_train_dict.items()} if isinstance(X_train_dict, dict) \
+               else X_train_dict[i:i+batch_size]
+        preds.append(self.model.predict(batch, verbose=0))
+    
+    return self._convert_to_hours(np.concatenate(preds))
