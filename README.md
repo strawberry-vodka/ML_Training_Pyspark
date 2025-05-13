@@ -32,4 +32,6 @@ def preprocess_data(self, data, is_train=True):
             X_numerical_scaled = self.scaler.fit_transform(data[self.numerical_vars])
         else:
             X_numerical_scaled = self.scaler.transform(data[self.numerical_vars])
+
+ValueError: operands could not be broadcast together with shapes (258358,) (222858,) () 
         
