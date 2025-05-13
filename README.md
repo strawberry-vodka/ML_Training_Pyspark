@@ -1,90 +1,35 @@
-class CyclicOrdinalRegressor:
-    # ... [Keep all previous methods unchanged until train_model] ...
-
-    def train_model(self, full_train_data, target_column, time_column='click_date',
-                   batch_size=32768, epochs=100, validation_split=0.2):
-        """Batch-wise training with temporal validation split"""
-        # 1. Sort by time and split
-        full_train_data = full_train_data.sort_values(time_column)
-        split_idx = int(len(full_train_data) * (1 - validation_split))
-        train_data = full_train_data.iloc[:split_idx]
-        val_data = full_train_data.iloc[split_idx:]
+def preprocess_data(self, data, is_train=True):
+        """Prepare all input types with proper transformations"""
+        X_categorical = []
         
-        print(f"Training period: {train_data[time_column].min()} to {train_data[time_column].max()}")
-        print(f"Validation period: {val_data[time_column].min()} to {val_data[time_column].max()}")
+        # 1. Process categorical columns
+        for col in self.categorical_vars:
+            if is_train:
+                le = LabelEncoder()
+                data[f'{col}_enc'] = le.fit_transform(data[col])
+                self.label_encoders[col] = le
+            else:
+                # le = self.label_encoders[col]
+                # # Handle unseen categories by assigning to a new category
+                # data[f'{col}_enc'] = data[col].apply(
+                #     lambda x: le.transform([x])[0] if x in le.classes_ else self.max_categorical_values[col] + 1
+                # )
+                le = self.label_encoders[col]
+                classes = set(le.classes_)
+                max_val = self.max_categorical_values[col] + 1
+                mask = data[col].isin(classes)
 
-        # 2. One-time preprocessing (before any batches)
-        print("Preprocessing training data...")
-        X_train_full = self.preprocess_data(train_data, is_train=True)
-        y_train_full = np.column_stack([
-            train_data[f'{target_column}_sin'].values,
-            train_data[f'{target_column}_cos'].values
-        ])
+                data[f'{col}_enc'] = np.where(mask, le.transform(data[col][mask]), max_val)
+                
+            print(col)
+            X_categorical.append(data[f'{col}_enc'].values.reshape(-1, 1))
         
-        print("Preprocessing validation data...")
-        X_val = self.preprocess_data(val_data, is_train=False)
-        y_val = np.column_stack([
-            val_data[f'{target_column}_sin'].values,
-            val_data[f'{target_column}_cos'].values
-        ])
-
-        # 3. Convert to dictionary format for multi-input models
-        input_names = [layer.name for layer in self.model.inputs]
-        X_val_dict = dict(zip(input_names, X_val))
+        # 2. Process cyclical numerical features 
+        X_numerical_cyclical = data[self.numerical_cyclical_vars].values
         
-        # 4. Create batch generator
-        def batch_generator():
-            while True:  # Infinite generator for multiple epochs
-                # Process in temporal batches
-                for i in range(0, len(train_data), batch_size):
-                    batch_data = train_data.iloc[i:i+batch_size]
-                    
-                    # Use preprocessed data directly
-                    X_batch = [x[i:i+batch_size] for x in X_train_full]
-                    y_batch = y_train_full[i:i+batch_size]
-                    
-                    yield dict(zip(input_names, X_batch)), y_batch
-
-        # 5. Calculate steps per epoch
-        steps_per_epoch = int(np.ceil(len(train_data) / batch_size))
+        # 3. Scale numerical non-cyclic features 
+        if is_train:
+            X_numerical_scaled = self.scaler.fit_transform(data[self.numerical_vars])
+        else:
+            X_numerical_scaled = self.scaler.transform(data[self.numerical_vars])
         
-        # 6. Train with batch generator
-        history = self.model.fit(
-            x=batch_generator(),
-            steps_per_epoch=steps_per_epoch,
-            epochs=epochs,
-            validation_data=(X_val_dict, y_val),
-            callbacks=[
-                EarlyStopping(patience=5, restore_best_weights=True),
-                ModelCheckpoint('best_model.h5', save_best_only=True)
-            ],
-            verbose=2
-        )
-        
-        self._plot_training(history)
-        self.model.save(self.model_name)
-        return history
-
-    # ... [Keep remaining methods unchanged] ...
-
-
-    def predict_on_cached_train(self, batch_size=32768):
-    """Generate predictions using the cached X_train from training"""
-    if not hasattr(self, 'X_train_full'):
-        raise ValueError("No cached training data found. Call train_model first.")
-    
-    # Convert to dictionary if multi-input
-    if isinstance(self.X_train_full, list):
-        input_names = [layer.name for layer in self.model.inputs]
-        X_train_dict = dict(zip(input_names, self.X_train_full))
-    else:
-        X_train_dict = self.X_train_full
-    
-    # Batch prediction
-    preds = []
-    for i in range(0, len(self.X_train_full[0]), batch_size):  # Assuming first array has length
-        batch = {k: v[i:i+batch_size] for k, v in X_train_dict.items()} if isinstance(X_train_dict, dict) \
-               else X_train_dict[i:i+batch_size]
-        preds.append(self.model.predict(batch, verbose=0))
-    
-    return self._convert_to_hours(np.concatenate(preds))
