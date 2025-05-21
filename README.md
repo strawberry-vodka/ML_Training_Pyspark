@@ -1,38 +1,69 @@
+import random
 import numpy as np
-import pandas as pd
+import tensorflow as tf
+from tensorflow.keras import backend as K
 
-def match_distribution_with_angles(pred_angles, hour_distribution):
-    # Sort predicted angles from low to high
-    sorted_indices = np.argsort(pred_angles)
-    sorted_angles = pred_angles[sorted_indices]
+class CyclicOrdinalRegressor:
+    def __init__(self, numerical_cyclical_vars, numerical_vars, categorical_vars, name, seed=42):
+        """Initialize with seed control for all components"""
+        self.seed = seed
+        self._set_all_seeds(seed)
+        
+        # Original initialization code
+        self.numerical_cyclical_vars = numerical_cyclical_vars
+        self.numerical_vars = numerical_vars
+        self.categorical_vars = categorical_vars
+        self.model_name = f"{name}.keras"
+        # ... rest of your existing __init__ code ...
 
-    # Compute how many samples should be assigned to each hour based on distribution
-    total = len(pred_angles)
-    hour_bins = (hour_distribution * total).round().astype(int)
+    def _set_all_seeds(self, seed):
+        """Set seeds for all random number generators"""
+        # Python
+        random.seed(seed)
+        # Numpy
+        np.random.seed(seed)
+        # TensorFlow
+        tf.random.set_seed(seed)
+        # Keras backend
+        K.set_floatx('float32')
+        os.environ['TF_DETERMINISTIC_OPS'] = '1'
+        os.environ['PYTHONHASHSEED'] = str(seed)
 
-    # Ensure total count matches (rounding errors)
-    diff = total - hour_bins.sum()
-    if diff != 0:
-        # Adjust the hour with the largest frequency
-        max_hour = hour_bins.idxmax()
-        hour_bins[max_hour] += diff
+def build_model(self):
+    """Build model with seed-controlled initialization"""
+    # Reset graph and seeds for clean slate
+    tf.keras.backend.clear_session()
+    self._set_all_seeds(self.seed)
+    
+    # Original model building code
+    # ... (your existing build_model code) ...
+    
+    # Compile with deterministic ops
+    self.model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+        loss=self.cyclic_loss,
+        metrics=['mae'],
+        run_eagerly=False  # For determinism
+    )
 
-    # Assign hours according to bin sizes
-    matched_hours = np.empty_like(pred_angles, dtype=int)
-    start = 0
-    for hour in sorted(hour_bins.index):
-        count = hour_bins[hour]
-        matched_hours[sorted_indices[start:start+count]] = hour
-        start += count
-
-    return matched_hours
-
-
-# Your predicted degrees array
-pred_angles = model_output_degrees  # shape (n_samples,), range [-180, 180]
-
-# Your training hour distribution
-hour_distribution = train_df["click_hour"].value_counts(normalize=True).sort_index()
-
-# Get mapped click hours
-final_click_hour_preds = match_distribution_with_angles(pred_angles, hour_distribution)
+def train_model(self, train_data, target_column, **kwargs):
+    """Training with full seed control"""
+    # Set seeds before any random operations
+    self._set_all_seeds(self.seed)
+    
+    # Data shuffling (if any) should use seed
+    train_data = train_data.sample(frac=1, random_state=self.seed)  # If shuffling
+    
+    # Original training code
+    # ... (your existing train_model code) ...
+    
+    # Add seed to fit() if using shuffle=True
+    history = self.model.fit(
+        x=X_train_dict,
+        y=y_train,
+        shuffle=False,  # Or use shuffle=True with seed
+        # shuffle=True,  # If enabled:
+        # shuffle_buffer_size=len(train_data),  # Full shuffle
+        # seed=self.seed,
+        **kwargs
+    )
