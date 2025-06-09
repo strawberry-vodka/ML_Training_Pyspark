@@ -1,45 +1,48 @@
-from pymongo import MongoClient
 import pandas as pd
 import random
+from pymongo import MongoClient
 
-# MongoDB setup
-client = MongoClient("mongodb://localhost:27017/")
-db = client["ab_test_db"]
-collection = db["user_assignments"]
+class ABTestAssigner:
+    def __init__(self, mongo_uri="mongodb://localhost:27017/", db_name="ab_test_db"):
+        self.client = MongoClient(mongo_uri)
+        self.collection = self.client[db_name]["user_assignments"]
 
-def get_user_flag(user_id: str, test_id: str, weight_1: float) -> int:
-    # Check if user already assigned for the given test_id
-    existing = collection.find_one({"user_id": user_id, "test_id": test_id})
-    if existing:
-        return existing["flag"]
-    
-    # Use random.choices to assign 0 or 1 based on weight
-    weights = [1 - weight_1, weight_1]  # 0 -> control, 1 -> treatment
-    flag = random.choices([0, 1], weights=weights, k=1)[0]
+    def get_existing_flags(self, audience_ids, test_id):
+        # Fetch existing records in bulk
+        existing_docs = self.collection.find(
+            {"user_id": {"$in": audience_ids}, "test_id": test_id},
+            {"_id": 0, "user_id": 1, "flag": 1}
+        )
+        return {doc["user_id"]: doc["flag"] for doc in existing_docs}
 
-    # Save assignment in MongoDB
-    collection.insert_one({
-        "user_id": user_id,
-        "test_id": test_id,
-        "flag": flag
-    })
-    
-    return flag
+    def assign_flags_to_users(self, audienceid_list, test_id: str, weight_1: float):
+        """
+        Assigns flags (0/1) to users for an A/B test and stores new ones in MongoDB.
+        """
+        ab_test_dict = {}
+        audience_ids = list(set(audienceid_list))  # Ensure unique
 
-def assign_flags_to_users(df_users: pd.DataFrame, test_id: str, weight_1: float = 0.5) -> pd.DataFrame:
-    df_users["flag"] = df_users["user_id"].apply(lambda uid: get_user_flag(uid, test_id, weight_1))
-    return df_users
+        # 1. Fetch already assigned users
+        existing_flags = self.get_existing_flags(audience_ids, test_id)
+        ab_test_dict.update(existing_flags)
 
-# Example usage
-if __name__ == "__main__":
-    # Simulate user dataset
-    data = {
-        "user_id": [f"user_{i}" for i in range(1, 11)]
-    }
-    df_users = pd.DataFrame(data)
-    
-    test_id = "ab_test_june_2025"
-    weight_1 = 0.7  # 70% chance of being in group 1
+        # 2. Identify unassigned users
+        new_users = list(set(audience_ids) - set(existing_flags.keys()))
 
-    df_result = assign_flags_to_users(df_users, test_id, weight_1)
-    print(df_result)
+        # 3. Random assignment for new users
+        if new_users:
+            new_flags = random.choices([0, 1], weights=[1 - weight_1, weight_1], k=len(new_users))
+            new_entries = []
+            for user_id, flag in zip(new_users, new_flags):
+                ab_test_dict[user_id] = flag
+                new_entries.append({
+                    "user_id": user_id,
+                    "test_id": test_id,
+                    "flag": flag
+                })
+
+            # 4. Bulk insert new records to MongoDB
+            if new_entries:
+                self.collection.insert_many(new_entries)
+
+        return ab_test_dict
