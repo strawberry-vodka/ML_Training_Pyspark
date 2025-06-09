@@ -1,49 +1,45 @@
+from pymongo import MongoClient
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+import random
 
-def create_optimized_test_set(historical_df, upcoming_start_date=None):
-    """
-    Optimized function to create test set for 1M+ users.
+# MongoDB setup
+client = MongoClient("mongodb://localhost:27017/")
+db = client["ab_test_db"]
+collection = db["user_assignments"]
 
-    Parameters:
-    - historical_df (pd.DataFrame): Must contain 'user_id', 'date', and feature columns.
-    - upcoming_start_date (str or None): 'YYYY-MM-DD'. If None, uses today's date.
+def get_user_flag(user_id: str, test_id: str, weight_1: float) -> int:
+    # Check if user already assigned for the given test_id
+    existing = collection.find_one({"user_id": user_id, "test_id": test_id})
+    if existing:
+        return existing["flag"]
+    
+    # Use random.choices to assign 0 or 1 based on weight
+    weights = [1 - weight_1, weight_1]  # 0 -> control, 1 -> treatment
+    flag = random.choices([0, 1], weights=weights, k=1)[0]
 
-    Returns:
-    - pd.DataFrame: Test set with 7 days of upcoming data per user.
-    """
-
-    # Step 1: Parse date column
-    historical_df['date'] = pd.to_datetime(historical_df['date'])
-
-    # Step 2: Get last known feature row per user (fastest using groupby().idxmax())
-    last_idx = historical_df.groupby('user_id')['date'].idxmax()
-    user_features_df = historical_df.loc[last_idx].drop(columns='date').reset_index(drop=True)
-
-    # Step 3: Create upcoming date range
-    if upcoming_start_date is None:
-        upcoming_start_date = datetime.today().date()
-    else:
-        upcoming_start_date = pd.to_datetime(upcoming_start_date).date()
-
-    upcoming_dates = pd.date_range(start=upcoming_start_date, periods=7)
-
-    # Step 4: Efficiently broadcast user_ids to dates using repeat + tile
-    user_ids = user_features_df['user_id'].values
-    n_users = len(user_ids)
-    n_days = len(upcoming_dates)
-
-    # Repeat users and tile dates to create cartesian product efficiently
-    test_user_ids = np.repeat(user_ids, n_days)
-    test_dates = np.tile(upcoming_dates, n_users)
-
-    test_df = pd.DataFrame({
-        'user_id': test_user_ids,
-        'date': test_dates
+    # Save assignment in MongoDB
+    collection.insert_one({
+        "user_id": user_id,
+        "test_id": test_id,
+        "flag": flag
     })
+    
+    return flag
 
-    # Step 5: Merge features
-    final_test_df = test_df.merge(user_features_df, on='user_id', how='left')
+def assign_flags_to_users(df_users: pd.DataFrame, test_id: str, weight_1: float = 0.5) -> pd.DataFrame:
+    df_users["flag"] = df_users["user_id"].apply(lambda uid: get_user_flag(uid, test_id, weight_1))
+    return df_users
 
-    return final_test_df
+# Example usage
+if __name__ == "__main__":
+    # Simulate user dataset
+    data = {
+        "user_id": [f"user_{i}" for i in range(1, 11)]
+    }
+    df_users = pd.DataFrame(data)
+    
+    test_id = "ab_test_june_2025"
+    weight_1 = 0.7  # 70% chance of being in group 1
+
+    df_result = assign_flags_to_users(df_users, test_id, weight_1)
+    print(df_result)
