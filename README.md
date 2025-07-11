@@ -195,3 +195,102 @@ For POC2, begin with FAQ + RAG and scale to fine-tuning based on traffic and acc
 
 Let me know if you'd like to build out a timeline or implementation plan next.
 
+
+To support intelligent dialogue flows — particularly when users don't provide all required details — your AI chatbot needs dialogue management and slot-filling capabilities layered on top of the intent classification + NER system. Here's how to incorporate this requirement into your overall design and into the document:
+
+✅ Add a New Section: Dialogue Flow and Slot-Filling
+You can add this just after the summary of approaches in your document:
+
+🔹 Dialogue Flow and Slot-Filling: Intelligent Information Gathering
+To ensure smooth and complete conversations, the system must:
+
+Detect missing information based on the user’s intent (e.g., travel date, destination).
+
+Ask relevant follow-up questions to collect that info.
+
+Maintain conversation state across turns.
+
+🧭 Objective & Mechanism:
+Enable intelligent, multi-turn dialogue by:
+
+Defining slots (parameters) for each intent.
+
+Detecting which slots are filled or missing from current user message.
+
+Generating follow-up questions using rules, templates, or LLM-based generation.
+
+Maintaining context using a dialogue manager or memory module.
+
+🔍 Example:
+User: “I want to book a flight”
+→ Intent: Make Booking
+→ Required Slots: source, destination, departure_date, return_date, passenger_count
+
+Detected Entities: None
+Bot: "Sure! Where would you like to fly from?"
+
+→ [After user replies]
+Bot: "Great! And where are you flying to?"
+
+…and so on, until all slots are filled.
+
+🧩 Data Required:
+A slot schema for each intent (domain-specific knowledge)
+
+Sample annotated multi-turn conversations (for training LLM-based flow if needed)
+
+⚙️ Modeling Technique:
+Approach 1: Rule-based Slot Checking
+
+Manually define required slots per intent
+
+Use simple checks to determine what's missing
+
+Prompt user accordingly
+
+Approach 2: LLM-based Dialogue Completion
+
+Use prompt engineering to both:
+
+Identify missing fields
+
+Generate a natural-sounding follow-up
+
+Prompt Example:
+
+text
+Copy
+Edit
+You are a travel booking assistant. Here's what the user said:
+
+"I want to book a flight to London."
+
+The required fields for booking are: source, destination, departure_date.
+
+From the message:
+- destination: London
+- source: missing
+- departure_date: missing
+
+Ask the next most relevant question to complete the booking:
+Expected Output:
+"Sure! Where are you flying from?"
+
+🧠 Deployment Complexity:
+Low if rule-based
+
+Medium if using LLM-based generation with memory
+
+💰 Cost Involved:
+Low (rules/templates)
+
+Medium (LLM inference, especially for long conversations)
+
+Would you like me to add this section directly to your working document?
+Or generate the slot schema template (per intent) that you can customize and use in code?
+
+Let me know how you’d like to proceed.
+
+
+
+
