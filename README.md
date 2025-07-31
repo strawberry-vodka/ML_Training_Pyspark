@@ -113,3 +113,4 @@ Reminders: Set reminders for booking confirmations, packing, and departure times
 By keeping these factors in mind, you’ll be better prepared for your vacation and can ensure a stress-free and enjoyable trip! 
 
  
+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
