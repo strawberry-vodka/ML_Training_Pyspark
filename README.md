@@ -1,25 +1,17 @@
 import re
 import spacy
+from pathlib import Path
 
-# Try loading large model; fallback to small if not installed
-try:
-    nlp = spacy.load("en_core_web_lg")
-except OSError:
-    nlp = spacy.load("en_core_web_sm")
+# Load spaCy small model with only NER enabled
+nlp = spacy.load("en_core_web_sm", disable=["parser", "tagger", "lemmatizer"])
+nlp.max_length = 2_000_000  # Safety for long transcripts
 
-# Updated regex patterns for PII
+# Compile regex patterns once
 PII_PATTERNS = {
-    "EMAIL": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"),
-    
-    # More flexible phone number detection: catches US & international formats
-    "PHONE": re.compile(
-        r"\+?\d[\d\s().-]{6,}\d"  # min length ~8 digits, allows symbols
-    ),
-    
+    "EMAIL": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
+    "PHONE": re.compile(r"\+?\d[\d\s().-]{6,}\d"),
     "CREDIT_CARD": re.compile(r"\b(?:\d[ -]*?){13,16}\b"),
     "ACCOUNT_NUMBER": re.compile(r"\b\d{9,18}\b"),
-    
-    # Expanded address regex
     "ADDRESS": re.compile(
         r"\b\d{1,6}\s+(?:[A-Za-z0-9]+\s?){0,6}"
         r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Pky|Parkway|Way|Court|Ct|Place|Pl|Circle|Cir)"
@@ -28,31 +20,43 @@ PII_PATTERNS = {
     )
 }
 
-# spaCy PII labels to mask
 SPACY_PII_LABELS = {"PERSON", "GPE", "ORG", "LOC", "ADDRESS"}
 
-def mask_pii(text):
-    doc = nlp(text)
+
+def mask_text(text, ents):
+    """Mask both spaCy entities and regex matches."""
     masked_text = text
-
-    # Step 1: Mask NER entities
-    for ent in doc.ents:
-        if ent.label_ in SPACY_PII_LABELS:
-            masked_text = re.sub(re.escape(ent.text), f"[{ent.label_}_REDACTED]", masked_text)
-
-    # Step 2: Mask regex-based patterns
+    # Mask spaCy entities
+    for ent_text, label in ents:
+        masked_text = re.sub(re.escape(ent_text), f"[{label}_REDACTED]", masked_text)
+    # Mask regex matches
     for label, pattern in PII_PATTERNS.items():
         masked_text = pattern.sub(f"[{label}_REDACTED]", masked_text)
-
     return masked_text
 
 
-# Example test
-transcript = """
-Hi, my name is John Smith. My email is john.smith@example.com.
-Call me at +1 415-555-2671 or +44 20 7946 0958.
-My billing address is 1280 S pky, North California or 45 Main Street, Springfield.
-My bank account is 987654321012 and my credit card is 4111 1111 1111 1111.
-"""
+def mask_pii_batch(texts):
+    """Process transcripts in batches for speed."""
+    masked_texts = []
+    for doc in nlp.pipe(texts, batch_size=50):  # Larger batch size = faster
+        ents = [(ent.text, ent.label_) for ent in doc.ents if ent.label_ in SPACY_PII_LABELS]
+        masked_texts.append(mask_text(doc.text, ents))
+    return masked_texts
 
-print(mask_pii(transcript))
+
+# Example usage on folder of transcripts
+input_folder = Path("transcripts_raw")
+output_folder = Path("transcripts_masked")
+output_folder.mkdir(exist_ok=True)
+
+# Read all transcripts
+texts = [p.read_text(encoding="utf-8") for p in input_folder.glob("*.txt")]
+
+# Mask in batch
+masked_results = mask_pii_batch(texts)
+
+# Save results
+for i, p in enumerate(input_folder.glob("*.txt")):
+    (output_folder / p.name).write_text(masked_results[i], encoding="utf-8")
+
+print(f"Masked {len(texts)} transcripts successfully!")
