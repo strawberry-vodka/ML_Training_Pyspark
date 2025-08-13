@@ -21,15 +21,16 @@ async def summarize_text(text):
 async def process_all(df, text_column):
     batch_size = 60
     count = 0
+    print(df.shape)
     for i in range(0, len(df), batch_size):
         batch = df.iloc[i:i+batch_size]
         tasks = [summarize_text(t) for t in batch[text_column]]
         results = await asyncio.gather(*tasks)
         df.loc[batch.index, "masked_summary"] = results
-        print("done")
         count += 1
-        if count>20:
+        print(count)
+        if count>5:
             time.sleep(15)
             count = 0
             print("Timer executed")
-    return df
+    return list(df['masked_summary'].values)
