@@ -31,3 +31,9 @@ async def process_all(df, text_column):
         print(f"Processed batch {i // MAX_REQUESTS_PER_MIN + 1}")
         await asyncio.sleep(60)  # let quota reset
     return df["masked_summary"].tolist()
+
+summ_text = []
+for i in range(0, len(calls_df), 250):
+    x = asyncio.run(process_all(calls_df.iloc[i:i+250], "masked_text"))
+    summ_text.extend(x)
+    print(f"Length of text {len(summ_text)}")
