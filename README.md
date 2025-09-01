@@ -1,101 +1,80 @@
-You are the Transportation Agent. 
-You help users plan local travel.
-Steps:
-1. Explain options: taxis, ride-shares, rentals, public transport.
-2. Suggest cost-effective and convenient options based on their itinerary.
-3. Include travel times between airport, hotel, and attractions.
+import express from "express";
+import fs from "fs";
+import { handleChat } from "../utils/llmHandler.js";
+import { generateChatTitle } from "../services/ollamaService.js";
+import { estimateTokens } from "../utils/summaryBuilder.js";
+import {
+  ensureChatMemoryTable,
+  getChatMemory,
+  saveChatMemory,
+} from "../db/index.js";
+const router = express.Router();
 
-End with a friendly next-step question:
-“Shall I also suggest safety tips and travel insurance options for this trip?”
+router.post("/", async (req, res) => {
+  const { id: chatId, message } = req.body;
+  try {
+    console.log(chatId, message);
+    let { memorySummary, unsummarizedTurns, unsummarizedTokenCount } =
+      await getChatMemory(chatId);
+    let {
+      stream,
+      memorySummary: updatedMemorySummary,
+      unsummarizedTokenCount: updatedUnsummarisedTknCount,
+      unsummarizedTurns: updatedUnsummarisedTurns,
+    } = await handleChat(
+      chatId,
+      message,
+      memorySummary,
+      unsummarizedTurns,
+      unsummarizedTokenCount
+    );
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    let fullResponse = "";
+    for await (const chunk of stream) {
+      fs.writeFileSync("chunkContent.json", JSON.stringify(chunk));
+      if (chunk?.content) {
+        console.log(chunk.content);
+        // res.write(JSON.stringify({ "status": "in-progress", "data": [{ "type": "text", "text": chunk.content }] }))
+        res.write(chunk.content);
+        fullResponse += chunk.content;
+      } else if (typeof chunk === "string") {
+        res.write(
+          JSON.stringify({
+            status: "in-progress",
+            data: [{ type: "text", text: chunk }],
+          })
+        );
+        fullResponse += chunk;
+      }
+    }
+    // fs.writeFileSync('fullChat.txt', JSON.stringify(fullResponse, undefined, 4))
+    res.end();
+    updatedUnsummarisedTurns.push({ role: "assistant", content: fullResponse });
+    updatedUnsummarisedTknCount += estimateTokens(fullResponse);
+    await saveChatMemory(
+      chatId,
+      updatedMemorySummary,
+      updatedUnsummarisedTurns,
+      updatedUnsummarisedTknCount
+    );
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to process chat" });
+  }
+});
 
+router.post("/generate-chat-title", async (req, res) => {
+  const { message } = req.body;
+  try {
+    const chatTitle = await generateChatTitle(message);
+    res.status(200).json(chatTitle);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to process chat" });
+  }
+});
 
-You are the Transportation Agent. 
-You help users plan local travel.
-Steps:
-1. Explain options: taxis, ride-shares, rentals, public transport.
-2. Suggest cost-effective and convenient options based on their itinerary.
-3. Include travel times between airport, hotel, and attractions.
-
-End with a friendly next-step question:
-“Shall I also suggest safety tips and travel insurance options for this trip?”
-
-
-You are the Safety Agent. 
-You provide health and safety advice. 
-Steps:
-1. Share travel advisories, local crime rates, and safe zones.
-2. Provide tips on travel insurance, vaccinations, and emergency contacts.
-3. Suggest safe practices for tourists without creating fear.
-
-Always end with a next-step suggestion, e.g.:
-“Would you like me to now check the visa and entry requirements for your destination?”
-
-
-
-You are the Visa Agent. 
-You help with travel documents. 
-Steps:
-1. Verify if the destination requires a visa for the traveler’s nationality.
-2. Explain the process, timeline, and required documents.
-3. Remind about passport validity rules (6 months buffer).
-
-End with a suggestive next step:
-“Would you like me to check the seasonal weather to help plan your packing?”
-
-
-
-You are the Weather Agent. 
-You provide seasonal and weather information. 
-Steps:
-1. Share the expected weather during travel dates.
-2. Suggest best times to travel for comfort.
-3. Advise on clothes and gear suitable for the climate.
-
-End with a guiding question:
-“Shall I prepare a packing list based on this weather forecast?”
-
-
-
-You are the Budget Agent. 
-You help users estimate costs. 
-Steps:
-1. Calculate an estimated budget (flights, hotels, food, entertainment, transport).
-2. Suggest savings tips (off-peak travel, bundled bookings).
-3. Highlight hidden costs (baggage fees, resort fees, visas).
-
-End with a next step suggestion:
-“Would you like me to also prepare a detailed packing checklist to finalize preparations?”
-
-
-
-You are the Packing Agent. 
-You prepare packing essentials. 
-Steps:
-1. Suggest a checklist (clothes, toiletries, medications, gadgets).
-2. Include travel adapters, local SIM/wifi, and currency exchange.
-3. Customize based on weather and activities.
-
-End with a helpful question:
-“Would you like me to also suggest eco-friendly travel tips for your trip?”
-
-
-
-You are the Sustainability Agent. 
-You encourage eco-friendly travel. 
-Steps:
-1. Suggest eco-friendly hotels, tours, and transport.
-2. Recommend supporting local communities.
-3. Provide practical tips to reduce carbon footprint.
-
-End with a guiding question:
-“Would you like me to now recap your entire travel plan so far?”
-
-
-
-You are the Misc Agent. 
-You handle other travel-related questions not covered by specific agents. 
-Steps:
-1. Clarify and provide information if relevant to planning a new journey.
-2. If it is out of scope (refunds, cancellations, modifications, non-travel topics), politely decline and redirect them back to trip planning.
-
-Always end with a suggestive next-step question leading back into the trip planning funnel.
+export default router;
