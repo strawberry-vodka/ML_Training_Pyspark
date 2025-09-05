@@ -1,95 +1,43 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-from routes.chat_routes import router as chat_router
-import os
-
-app = FastAPI()
-
-# CORS setup
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # update if you want specific origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Routes
-app.include_router(chat_router, prefix="/api/chat")
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 3000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
-
-
-
-from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse, JSONResponse
-import asyncio
-from utils.llmHandler import handle_chat
-from services.ollamaService import generate_chat_title
-from utils.summaryBuilder import estimate_tokens
-from db import get_chat_memory, save_chat_memory
-
-router = APIRouter()
-
-@router.post("/")
-async def chat_endpoint(request: Request):
-    body = await request.json()
-    chat_id = body.get("id")
-    message = body.get("message")
-
-    try:
-        memory_summary, unsummarized_turns, unsummarized_token_count = await get_chat_memory(chat_id)
-
-        result = await handle_chat(
-            chat_id,
-            message,
-            memory_summary,
-            unsummarized_turns,
-            unsummarized_token_count
-        )
-
-        stream = result["stream"]
-        updated_memory_summary = result["memorySummary"]
-        updated_unsummarised_tkn_count = result["unsummarizedTokenCount"]
-        updated_unsummarised_turns = result["unsummarizedTurns"]
-
-        async def event_generator():
-            full_response = ""
-            async for chunk in stream:
-                if isinstance(chunk, dict) and "content" in chunk:
-                    yield chunk["content"]
-                    full_response += chunk["content"]
-                elif isinstance(chunk, str):
-                    yield chunk
-                    full_response += chunk
-
-            updated_unsummarised_turns.append({"role": "assistant", "content": full_response})
-            updated_unsummarised_tkn_count += estimate_tokens(full_response)
-
-            await save_chat_memory(
-                chat_id,
-                updated_memory_summary,
-                updated_unsummarised_turns,
-                updated_unsummarised_tkn_count
-            )
-
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-    except Exception as e:
-        print(e)
-        return JSONResponse(status_code=500, content={"error": "Failed to process chat"})
-
-
-@router.post("/generate-chat-title")
-async def generate_title(request: Request):
-    body = await request.json()
-    message = body.get("message")
-    try:
-        chat_title = await generate_chat_title(message)
-        return JSONResponse(content=chat_title)
-    except Exception as e:
-        print(e)
-        return JSONResponse(status_code=500, content={"error": "Failed to process chat"})
+with t1 as(
+select SearchCityName, any(SearchGuid) as SearchGuid 
+from searches.hotel_searches_booked hsb
+where  SearchDate >= '2025-07-15' and
+ UPPER(SearchCityName) in 
+('BROOKLYN', 'NAPERVILLE', 'REDMOND', 'CHESTERFIELD', 'ONTARIO', 
+'SEATTLE', 'NEW YORK CITY', 'LOS ANGELES', 'DUBAI', 'BANGKOK', 'LAS VEGAS')
+GROUP by SearchCityName),
+t2 as (select SearchGuid from t1),
+l1 as(SELECT SearchGuid, min(FinalPrice) as CheapestPrice_Search,
+avg(case when positionCaseInsensitive(HotelCompleteAddress, SearchCityName)>0 then HotelLatitude end) as lt1, 
+avg(case when positionCaseInsensitive(HotelCompleteAddress, SearchCityName)>0 then HotelLongitude end) as ln1,
+avg(case when lower(SearchCityName) = lower(HotelCityName) then HotelLatitude end) as lt2, 
+avg(case when lower(SearchCityName) = lower(HotelCityName) then HotelLongitude end) as ln2, 
+avg(HotelLatitude) as lt3, avg(HotelLongitude) as ln3
+from searches.hotel_searches_booked hsb 
+where SearchGuid in (select SearchGuid from t2) group by SearchGuid),
+mains as(
+    select `SearchDate`, `PortalID`, `CheckIn`, `CheckOut`,date_diff('days', SearchDate, CheckIn) as LeadDays,date_diff('days', CheckIn, CheckOut) as NumberOfNights
+    , upper(`SearchCityName`) as SearchCityName, SearchLocationID, `SearchFrom`, `TotalRooms`, TotalChildren + TotalAdults as TotalPax, hsb.SearchGuid, `TripType`
+    , `FPHotelID`, `IsBooked`, upper(`BrandName`) as BrandName,`HotelName`, upper(`HotelCityName`) as HotelCityName, upper(`HotelStateName`) as HotelStateName, upper(`HotelCountryCode`) as HotelCountryCode ,if(HotelCountryCode='US',1,0) as IsUS,`HotelCompleteAddress`
+    , `HotelLatitude`, `HotelLongitude`,`HotelPropertyType`, `BookingEngine`, `TotalTax`, `SupplierPrice`, `DisplayPrice`, `FinalPrice`, FinalPrice / TotalRooms as FinalPrice_Per_Room
+    ,`TotalServiceFee`, `ServiceFee`,`IsSplashHotel`, `FareportalMarkupEngine`, `SearchLatitude`, `SearchLongitude`, DisplayPrice - SupplierPrice as PriceMargin
+    ,has(AmenitiesKnownName,'Bar') as IsBar, `SearchAirportCityCode`,`SearchLocationID`,`Past15_Bookings`
+    , COALESCE(lt1,lt2,lt3) as mean_latitude, COALESCE(ln1,ln2,ln3) mean_longitude, FinalPrice - CheapestPrice_Search as CheapestHotel_PriceDiff, CheapestPrice_Search
+    , greatCircleDistance(HotelLatitude,HotelLongitude,mean_latitude,mean_longitude) dcc, positionCaseInsensitive(HotelCityName, SearchCityName) + positionCaseInsensitive(SearchCityName,HotelCityName) > 0 as SameHotelCity
+    , DENSE_RANK() Over (PARTITION by SearchGuid ORDER by FinalPrice) as FinalPrice_rank
+    , DENSE_RANK() Over (PARTITION by SearchGuid ORDER by TotalTax) as TotalTax_rank
+    , DENSE_RANK() Over (PARTITION by SearchGuid ORDER by dcc) as Distance_from_City_Center_rank
+    , ROW_NUMBER() OVER (PARTITION by SearchGuid ORDER by rand() ) as rn
+    , RecommenderPredictedScore, RecommenderPredictedRank, CMSHotelRank, PackageType
+    from searches.hotel_searches_booked hsb
+    left join l1 on l1.SearchGuid = hsb.SearchGuid 
+    where hsb.SearchGuid in (select SearchGuid from t2))    
+ SELECT SearchDate, PortalID, CheckIn, CheckOut, LeadDays, NumberOfNights, SearchCityName, SameHotelCity,SearchLocationID, SearchFrom, TotalRooms, TotalPax, SearchGuid, 
+ RecommenderPredictedScore, RecommenderPredictedRank, TripType, FPHotelID, CMSHotelRank, PackageType, 
+ IsBooked, BrandName, HotelName, HotelCityName, HotelStateName, HotelCountryCode, IsUS, HotelCompleteAddress, 
+ HotelLatitude, HotelLongitude, HotelPropertyType, BookingEngine, TotalTax, SupplierPrice, DisplayPrice, 
+ FinalPrice, FinalPrice_Per_Room, TotalServiceFee, ServiceFee, IsSplashHotel, FareportalMarkupEngine, 
+ SearchLatitude, SearchLongitude, PriceMargin, IsBar, SearchAirportCityCode, 
+ Past15_Bookings, mean_latitude, mean_longitude, CheapestHotel_PriceDiff, 
+ CheapestPrice_Search, FinalPrice_rank, TotalTax_rank, Distance_from_City_Center_rank, 
+ dcc/1000 as Distance_from_City_Center from mains;
